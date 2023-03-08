@@ -1,0 +1,5 @@
+This is a simple mode for interacting with [[https://w1.fi/wpa_supplicant][wpa_supplicant]] via its D-Bus interface.
+
+Currenly supported:
+- scanning for access points
+- connecting to the selected one using PSK
