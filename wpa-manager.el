@@ -94,6 +94,8 @@ Connect to it using wpa-psk method using pre-shared key PSK."
                               (:dict-entry "psk" (:variant :string ,psk))))))
 
 (defvar-local wpa-manager--scan-signal nil)
+
+;;;###autoload
 (define-derived-mode wpa-manager-mode tabulated-list-mode
   "WPA Supplicant"
   "Major mode for managing WPA supplicant."
