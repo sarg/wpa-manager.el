@@ -1,4 +1,4 @@
-;;; wpa-manager.el --- Manage wpa_supplicant via the D-Bus interface
+;;; wpa-manager.el --- Manage wpa_supplicant via the D-Bus interface -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2023 by Sergey Trofimov
 
@@ -39,12 +39,16 @@ If PROP is non-nil, return it only."
 (defun wpa-manager--dbus-call (method callback &rest args)
   "Call dbus METHOD with CALLBACK and ARGS supplied."
   (apply #'dbus-call-method-asynchronously
-   :system wpa-manager--service wpa-manager--interface-path wpa-manager--service-interface method callback args))
+         :system wpa-manager--service wpa-manager--interface-path wpa-manager--service-interface method callback args))
 
 (defun wpa-manager--list-entries ()
   "List last-scanned access-points."
-  (let ((current-bss (wpa-manager--dbus-get-props wpa-manager--interface-path ".Interface" "CurrentBSS"))
-        (bss-list (wpa-manager--dbus-get-props wpa-manager--interface-path ".Interface" "BSSs")))
+  (let* ((current-bss (wpa-manager--dbus-get-props wpa-manager--interface-path ".Interface" "CurrentBSS"))
+         (bss-list (wpa-manager--dbus-get-props wpa-manager--interface-path ".Interface" "BSSs"))
+         (network-info (mapcar (lambda (net) (let* ((props (wpa-manager--dbus-get-props net ".Network" "Properties"))
+                                                    (ssid (substring (caar (alist-get "ssid" props nil nil #'equal)) 1 -1)))
+                                               (cons ssid net)))
+                               (wpa-manager--dbus-get-props wpa-manager--interface-path ".Interface" "Networks"))))
 
     (setq tabulated-list-entries
           (cl-loop for bss in bss-list
@@ -55,43 +59,50 @@ If PROP is non-nil, return it only."
                    for bssid = (string-join (mapcar (lambda (n) (format "%02X" n))
                                                     (alist-get "BSSID" props nil nil #'equal))
                                             ":")
-                   collect (list bss (vector
-                                      (if (string= bss current-bss)
-                                          (propertize ssid 'face 'bold)
-                                        ssid)
-                                      bssid
-                                      (number-to-string freq)
-                                      (number-to-string signal)))))))
+                   for net = (alist-get ssid network-info nil nil #'equal)
+                   collect (list (list bss net)
+                                 (vector
+                                  (propertize ssid 'face
+                                              `(,@(if (string= bss current-bss) '(bold) '())
+                                                ,@(if net '(underline) '())))
+                                  bssid
+                                  (number-to-string freq)
+                                  (number-to-string signal)))))))
 
 (defun wpa-manager-scan ()
   "Start scanning for access points."
   (interactive)
   (wpa-manager--dbus-call "Scan"
-                  (lambda () (message "Scan requested"))
-                  '(:array (:dict-entry "Type" (:variant :string "active")))))
+                          (lambda () (message "Scan requested"))
+                          '(:array (:dict-entry "Type" (:variant :string "active")))))
 
 (defun wpa-manager--select-network (network)
   "Select and connect to a NETWORK."
   (wpa-manager--dbus-call "SelectNetwork" nil :object-path network))
 
-(defun wpa-manager-connect (psk)
+(defun wpa-manager-connect ()
   "Create network entry for the currently selected access point.
 Connect to it using wpa-psk method using pre-shared key PSK."
-  (interactive "MPassword: ")
+  (interactive)
 
-  (let* ((bss (tabulated-list-get-id))
-         (props (wpa-manager--dbus-get-props bss ".BSS"))
-         (ssid (dbus-byte-array-to-string (alist-get "SSID" props nil nil #'equal)))
-         (rsn (alist-get "RSN" props nil nil #'equal))
-         (key-mgmt (caar (alist-get "KeyMgmt" rsn nil nil #'equal))))
+  (let* ((id (tabulated-list-get-id))
+         (bss (car id))
+         (net (cadr id)))
 
-    (cl-assert (seq-contains-p key-mgmt "wpa-psk" #'string=) nil
-               "Only wpa-psk is supported for now, available methods: %s" key-mgmt)
+    (if net (wpa-manager--select-network net)
+      (let* ((psk (read-passwd "Password: "))
+             (props (wpa-manager--dbus-get-props bss ".BSS"))
+             (ssid (dbus-byte-array-to-string (alist-get "SSID" props nil nil #'equal)))
+             (rsn (alist-get "RSN" props nil nil #'equal))
+             (key-mgmt (caar (alist-get "KeyMgmt" rsn nil nil #'equal))))
 
-    (wpa-manager--dbus-call "AddNetwork" #'wpa-manager--select-network
-                            `(:array
-                              (:dict-entry "ssid" (:variant :string ,ssid))
-                              (:dict-entry "psk" (:variant :string ,psk))))))
+        (cl-assert (seq-contains-p key-mgmt "wpa-psk" #'string=) nil
+                   "Only wpa-psk is supported for now, available methods: %s" key-mgmt)
+
+        (wpa-manager--dbus-call "AddNetwork" #'wpa-manager--select-network
+                                `(:array
+                                  (:dict-entry "ssid" (:variant :string ,ssid))
+                                  (:dict-entry "psk" (:variant :string ,psk))))))))
 
 (defvar-local wpa-manager--scan-signal nil)
 
@@ -108,12 +119,17 @@ Connect to it using wpa-psk method using pre-shared key PSK."
               ;; TODO: allow selecting interface
               (car (wpa-manager--dbus-get-props wpa-manager--service-path "" "Interfaces")))
 
-  (setq wpa-manager--scan-signal
-        (dbus-register-signal
-         :system wpa-manager--service
-         wpa-manager--interface-path
-         wpa-manager--service-interface
-         "ScanDone" (lambda (success) (message "Scan finished: %s" success) (revert-buffer))))
+  (let ((buffer (current-buffer)))
+    (setq wpa-manager--scan-signal
+          (dbus-register-signal
+           :system wpa-manager--service
+           wpa-manager--interface-path
+           wpa-manager--service-interface
+           "ScanDone" (lambda (success)
+                        (when (eq buffer (current-buffer))
+                          (message "Scan finished: %s" success))
+
+                        (with-current-buffer buffer (revert-buffer))))))
 
   (add-hook 'tabulated-list-revert-hook #'wpa-manager--list-entries nil t)
   (add-hook 'kill-buffer-hook (lambda () (dbus-unregister-object wpa-manager--scan-signal)) nil t)
