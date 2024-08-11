@@ -63,12 +63,14 @@ If PROP is non-nil, return it only."
                    unless (string-empty-p ssid)
                    collect (list (list bss net)
                                  (vector
-                                  (propertize ssid 'face
-                                              `(,@(if (string= bss current-bss) '(bold) '())
-                                                ,@(if net '(underline) '())))
+                                  (propertize ssid 'face (when (string= bss current-bss) 'bold))
                                   bssid
                                   (number-to-string freq)
-                                  (number-to-string signal)))))))
+                                  (number-to-string signal)))))
+    (setq tabulated-list-groups
+          (tabulated-list-groups
+           tabulated-list-entries
+           `(:path-function ,(lambda (el) (list (if (cadar el) '("Network") '("Endpoint")))))))))
 
 (defun wpa-manager-scan ()
   "Start scanning for access points."
