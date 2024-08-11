@@ -60,6 +60,7 @@ If PROP is non-nil, return it only."
                                                     (alist-get "BSSID" props nil nil #'equal))
                                             ":")
                    for net = (alist-get ssid network-info nil nil #'equal)
+                   unless (string-empty-p ssid)
                    collect (list (list bss net)
                                  (vector
                                   (propertize ssid 'face
@@ -110,7 +111,7 @@ Connect to it using wpa-psk method using pre-shared key PSK."
 (define-derived-mode wpa-manager-mode tabulated-list-mode
   "WPA Supplicant"
   "Major mode for managing WPA supplicant."
-  (setq tabulated-list-format [("SSID" 24 t) ("BSSID" 32 t) ("Freq" 6 t) ("Signal" 6 t)]
+  (setq tabulated-list-format [("SSID" 24 t) ("BSSID" 18 t) ("Freq" 6 t) ("Signal" 6 t)]
         tabulated-list-entries nil
         tabulated-list-padding 0
         tabulated-list-sort-key (cons "Signal" nil))
