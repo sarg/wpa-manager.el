@@ -81,6 +81,14 @@ If PROP is non-nil, return it only."
   "Select and connect to a NETWORK."
   (wpa-manager--dbus-call "SelectNetwork" nil :object-path network))
 
+(defun wpa-manager-delete-network ()
+  "Delete NETWORK."
+  (interactive)
+  (let* ((id (tabulated-list-get-id))
+         (net (cadr id)))
+    (when net
+      (wpa-manager--dbus-call "RemoveNetwork" nil :object-path net))))
+
 (defun wpa-manager-connect ()
   "Create network entry for the currently selected access point.
 Connect to it using wpa-psk method using pre-shared key PSK."
@@ -145,6 +153,7 @@ Connect to it using wpa-psk method using pre-shared key PSK."
     (set-keymap-parent map tabulated-list-mode-map)
     (define-key map [?s] #'wpa-manager-scan)
     (define-key map [?c] #'wpa-manager-connect)
+    (define-key map [?D] #'wpa-manager-delete-network)
     map))
 
 (defun wpa-manager ()
