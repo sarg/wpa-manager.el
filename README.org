@@ -1,5 +1,4 @@
-This is a simple mode for interacting with [[https://w1.fi/wpa_supplicant][wpa_supplicant]] via its D-Bus interface.
-
-Currenly supported:
+This repo provides two simple `tabulated-list-mode`-based interfaces for wifi daemons.
+Basic support implemented for [[https://w1.fi/wpa_supplicant][wpa_supplicant]] and [[https://wiki.archlinux.org/title/Iwd][IWD]]:
 - scanning for access points
 - connecting to the selected one using PSK
