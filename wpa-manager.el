@@ -121,6 +121,7 @@ Connect to it using wpa-psk method using pre-shared key PSK."
 (define-derived-mode wpa-manager-mode tabulated-list-mode
   "WPA Supplicant"
   "Major mode for managing WPA supplicant."
+  :interactive nil
   (setq tabulated-list-format [("SSID" 24 t) ("BSSID" 18 t) ("Freq" 6 t) ("Signal" 6 t)]
         tabulated-list-entries nil
         tabulated-list-padding 0
@@ -158,6 +159,7 @@ Connect to it using wpa-psk method using pre-shared key PSK."
     (define-key map [?D] #'wpa-manager-delete-network)
     map))
 
+;;;###autoload
 (defun wpa-manager ()
   "Manage wpa_supplicant."
   (interactive)

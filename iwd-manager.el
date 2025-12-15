@@ -20,6 +20,7 @@
 
 (defvar-local iwd-manager--cached-objects nil
   "Cache for D-Bus managed objects to avoid repeated calls.")
+(put 'iwd-manager--cached-objects 'permanent-local t)
 
 (defun iwd-manager--get-station-path ()
   "Return the path of the first available station device."
@@ -38,8 +39,8 @@
 
 (defun iwd-manager--list-entries ()
   "List last-scanned access-points."
-  (setq-local iwd-manager--cached-objects
-              (dbus-get-all-managed-objects :system iwd-manager--service "/"))
+  (setq iwd-manager--cached-objects
+        (dbus-get-all-managed-objects :system iwd-manager--service "/"))
 
   (cl-loop
    with ordered = (dbus-call-method
@@ -80,7 +81,8 @@
               (ssid (alist-get "Name" props nil nil #'string=)))
     (read-passwd (format "Passphrase for %s: " ssid))))
 
-(defvar iwd-manager--agent-objects '())
+(defvar-local iwd-manager--agent-objects '())
+(put 'iwd-manager--agent-objects 'permanent-local t)
 
 (defun iwd-manager--register-agent ()
   "Register the agent with IWD."
@@ -172,6 +174,7 @@
     (define-key map [?D] #'iwd-manager-delete-network)
     map))
 
+;;;###autoload
 (defun iwd-manager ()
   "Manage wifi connections through IWD."
   (interactive)
