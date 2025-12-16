@@ -40,16 +40,26 @@
   "Find cached dbus object for given PATH."
   (assoc path iwd-manager--cached-objects #'string=))
 
+(defun iwd-manager--select-device ()
+  "Select device to manage."
+  (interactive)
+  (or
+   (seq-find
+    (lambda (obj) (assoc iwd-manager--station-interface (cadr obj) #'string=))
+    iwd-manager--cached-objects)
+   (progn
+     (kill-buffer)
+     (user-error "No stations found"))))
+
 (defun iwd-manager--list-entries ()
   "List last-scanned access-points."
   (setq iwd-manager--cached-objects
         (dbus-get-all-managed-objects :system iwd-manager--service "/"))
 
-  (when-let* ((device
-               (seq-find
-                (lambda (obj) (assoc iwd-manager--station-interface (cadr obj) #'string=))
-                iwd-manager--cached-objects)))
-    (setq iwd-manager--device device))
+  (setq iwd-manager--device
+        (if iwd-manager--device
+            (iwd-manager--find-obj (car iwd-manager--device))
+          (iwd-manager--select-device)))
   
   (cl-loop
    with ordered =
