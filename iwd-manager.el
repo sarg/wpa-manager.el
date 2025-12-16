@@ -5,7 +5,7 @@
 ;; Author: Sergey Trofimov <sarg@sarg.org.ru>
 ;; Version: 0.1
 ;; URL: https://github.com/sarg/wpa-manager.el
-;; Package-Requires: ((emacs "30.1"))
+;; Package-Requires: ((emacs "26.1"))
 
 ;;; Commentary:
 ;;; A dbus-based client for iNet Wireless Daemon.
@@ -16,42 +16,54 @@
 (require 'cl-lib)
 
 (defconst iwd-manager--service "net.connman.iwd")
+(defconst iwd-manager--path "/net/connman/iwd")
+(defconst iwd-manager--agent-path "/iwd/agent")
+(defconst iwd-manager--agent-manager-interface "net.connman.iwd.AgentManager")
 (defconst iwd-manager--station-interface "net.connman.iwd.Station")
 
 (defvar-local iwd-manager--cached-objects nil
   "Cache for D-Bus managed objects to avoid repeated calls.")
 (put 'iwd-manager--cached-objects 'permanent-local t)
 
-(defun iwd-manager--get-station-path ()
-  "Return the path of the first available station device."
-  (car
-   (seq-find
-    (lambda (obj)
-      (seq-find
-       (lambda (iface) (string= iwd-manager--station-interface (car iface)))
-       (cadr obj)))
-    iwd-manager--cached-objects)))
+(defvar-local iwd-manager--device nil
+  "Wireless interface to manage.")
+(put 'iwd-manager--device 'permanent-local t)
 
-(defun iwd-manager--find-obj (path)
+(defvar-local iwd-manager--registered-objects '())
+(put 'iwd-manager--registered-objects 'permanent-local t)
+
+(defsubst iwd-manager--interface (obj iface)
+  "Return IFACE of OBJ."
+  (car (alist-get iface (cadr obj) nil nil #'string=)))
+
+(defsubst iwd-manager--find-obj (path)
   "Find cached dbus object for given PATH."
-  (seq-find (lambda (o) (string= path (car o)))
-            iwd-manager--cached-objects))
+  (assoc path iwd-manager--cached-objects #'string=))
 
 (defun iwd-manager--list-entries ()
   "List last-scanned access-points."
   (setq iwd-manager--cached-objects
         (dbus-get-all-managed-objects :system iwd-manager--service "/"))
 
+  (unless iwd-manager--device
+    (when-let* ((device
+                 (seq-find
+                  (lambda (obj) (assoc iwd-manager--station-interface (cadr obj) #'string=))
+                  iwd-manager--cached-objects))
+
+                (device-props (iwd-manager--interface device "net.connman.iwd.Device")))
+      (setq iwd-manager--device device)
+      (setq mode-name (concat "IWD: " (alist-get "Name" device-props nil nil #'string=)))))
+
   (cl-loop
-   with ordered = (dbus-call-method
-                   :system iwd-manager--service
-                   (iwd-manager--get-station-path)
-                   iwd-manager--station-interface
-                   "GetOrderedNetworks")
+   with ordered =
+   (dbus-call-method
+    :system iwd-manager--service (car iwd-manager--device) iwd-manager--station-interface
+    "GetOrderedNetworks")
    for net in ordered
    collect (let* ((net-path (car net))
                   (obj (iwd-manager--find-obj net-path))
-                  (props (car (cdaadr obj)))
+                  (props (iwd-manager--interface obj "net.connman.iwd.Network"))
                   (signal (/ (cadr net) 100))
                   (ssid (alist-get "Name" props nil nil #'string=))
                   (connected (alist-get "Connected" props nil nil #'string=)))
@@ -65,46 +77,41 @@
 (defun iwd-manager-scan ()
   "Start scanning for access points."
   (interactive nil iwd-manager-mode)
-  (let ((station-path (iwd-manager--get-station-path)))
-    (when station-path
-      (dbus-call-method
-       :system iwd-manager--service
-       station-path
-       iwd-manager--station-interface
-       "Scan")
-      (message "Scanning for networks..."))))
+  (dbus-call-method
+   :system iwd-manager--service
+   (car iwd-manager--device) iwd-manager--station-interface
+   "Scan")
+  (message "Scanning for networks..."))
 
 (defun iwd-manager--request-passphrase (network-path)
   "Request passphrase for network identified by NETWORK-PATH."
   (when-let* ((obj (iwd-manager--find-obj network-path))
-              (props (car (cdaadr obj)))
+              (props (iwd-manager--interface obj "net.connman.iwd.Network"))
               (ssid (alist-get "Name" props nil nil #'string=)))
-    (read-passwd (format "Passphrase for %s: " ssid))))
-
-(defvar-local iwd-manager--agent-objects '())
-(put 'iwd-manager--agent-objects 'permanent-local t)
+    (condition-case err
+        (read-passwd (format "Passphrase for %s: " ssid))
+      (quit (list :error "net.connman.iwd.Agent.Error.Canceled"
+                  (error-message-string err))))))
 
 (defun iwd-manager--register-agent ()
   "Register the agent with IWD."
   (add-to-list
-   'iwd-manager--agent-objects
+   'iwd-manager--registered-objects
    (dbus-register-method
-    :system
-    nil "/Agent" "net.connman.iwd.Agent" "RequestPassphrase"
-    #'iwd-manager--request-passphrase 'dont-register))
+    :system nil iwd-manager--agent-path "net.connman.iwd.Agent"
+    "RequestPassphrase" #'iwd-manager--request-passphrase
+    'dont-register))
 
   (dbus-call-method
-   :system iwd-manager--service "/net/connman/iwd"
-   "net.connman.iwd.AgentManager"
-   "RegisterAgent"
-   :object-path "/Agent")
+   :system iwd-manager--service iwd-manager--path iwd-manager--agent-manager-interface
+   "RegisterAgent" :object-path iwd-manager--agent-path)
 
   (let ((buffer (current-buffer)))
     (dolist (i '(("/" . "InterfacesAdded")
                  ("/" . "InterfacesRemoved")
                  (nil . "PropertiesChanged")))
       (add-to-list
-       'iwd-manager--agent-objects
+       'iwd-manager--registered-objects
        (dbus-register-signal
         :system iwd-manager--service (car i)
         dbus-interface-objectmanager (cdr i)
@@ -115,29 +122,25 @@
 
 (defun iwd-manager--unregister-agent ()
   "Unregister the agent from IWD."
-  (dolist (o iwd-manager--agent-objects)
+  (dolist (o iwd-manager--registered-objects)
     (dbus-unregister-object o))
 
+  (setq iwd-manager--registered-objects '())
   (dbus-call-method
-   :system iwd-manager--service "/net/connman/iwd"
-   "net.connman.iwd.AgentManager"
-   "UnregisterAgent"
-   :object-path "/Agent")
-
-  (setq iwd-manager--agent-objects '()))
+   :system iwd-manager--service iwd-manager--path iwd-manager--agent-manager-interface
+   "UnregisterAgent" :object-path iwd-manager--agent-path))
 
 (defun iwd-manager-delete-network (&rest _)
   "Forget NETWORK."
   (interactive nil iwd-manager-mode)
   (if-let* ((obj (tabulated-list-get-id))
-            (props (car (cdaadr obj)))
+            (props (iwd-manager--interface obj "net.connman.iwd.Network"))
             ((alist-get "Connected" props nil nil #'string=))
             (net (alist-get "KnownNetwork" props nil nil #'string=)))
       (dbus-call-method
-       :system iwd-manager--service net
-       "net.connman.iwd.KnownNetwork"
-       "Forget"))
-  (user-error "Not a known network"))
+       :system iwd-manager--service net "net.connman.iwd.KnownNetwork"
+       "Forget")
+    (user-error "Not a known network")))
 
 (defun iwd-manager-connect ()
   "Connect to the currently selected access point."
@@ -145,8 +148,8 @@
   (let* ((obj (tabulated-list-get-id))
          (network-path (car obj)))
     (dbus-call-method-asynchronously
-     :system iwd-manager--service network-path
-     "net.connman.iwd.Network" "Connect" nil)))
+     :system iwd-manager--service network-path "net.connman.iwd.Network"
+     "Connect" nil)))
 
 ;;;###autoload
 (define-derived-mode iwd-manager-mode tabulated-list-mode
@@ -180,7 +183,7 @@
   (interactive)
   (dbus-ping :system iwd-manager--service 5000)
   (with-current-buffer (switch-to-buffer "*IWD Manager*")
-    (unless iwd-manager--agent-objects
+    (unless iwd-manager--registered-objects
       (iwd-manager--register-agent))
     (iwd-manager-mode))
   nil)
