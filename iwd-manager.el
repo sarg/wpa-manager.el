@@ -45,16 +45,12 @@
   (setq iwd-manager--cached-objects
         (dbus-get-all-managed-objects :system iwd-manager--service "/"))
 
-  (unless iwd-manager--device
-    (when-let* ((device
-                 (seq-find
-                  (lambda (obj) (assoc iwd-manager--station-interface (cadr obj) #'string=))
-                  iwd-manager--cached-objects))
-
-                (device-props (iwd-manager--interface device "net.connman.iwd.Device")))
-      (setq iwd-manager--device device)
-      (setq mode-name (concat "IWD: " (alist-get "Name" device-props nil nil #'string=)))))
-
+  (when-let* ((device
+               (seq-find
+                (lambda (obj) (assoc iwd-manager--station-interface (cadr obj) #'string=))
+                iwd-manager--cached-objects)))
+    (setq iwd-manager--device device))
+  
   (cl-loop
    with ordered =
    (dbus-call-method
@@ -107,14 +103,14 @@
    "RegisterAgent" :object-path iwd-manager--agent-path)
 
   (let ((buffer (current-buffer)))
-    (dolist (i '(("/" . "InterfacesAdded")
-                 ("/" . "InterfacesRemoved")
-                 (nil . "PropertiesChanged")))
+    (dolist (i `(("/" ,dbus-interface-objectmanager "InterfacesAdded")
+                 ("/" ,dbus-interface-objectmanager "InterfacesRemoved")
+                 (nil ,dbus-interface-properties "PropertiesChanged")))
       (add-to-list
        'iwd-manager--registered-objects
        (dbus-register-signal
-        :system iwd-manager--service (car i)
-        dbus-interface-objectmanager (cdr i)
+        :system iwd-manager--service
+        (nth 0 i) (nth 1 i) (nth 2 i)
         (lambda (&rest _)
           (when (buffer-live-p buffer)
             (with-current-buffer buffer
@@ -177,6 +173,22 @@
     (define-key map [?D] #'iwd-manager-delete-network)
     map))
 
+
+(defvar iwd-manager--mode-info
+  '(:eval (iwd-manager--mode-info))
+  "Mode info display.")
+
+(put 'iwd-manager--mode-info 'risky-local-variable t)
+
+(defun iwd-manager--mode-info ()
+  "Update the mode info display."
+  (when-let* ((device-props (iwd-manager--interface iwd-manager--device "net.connman.iwd.Device"))
+              (station-props (iwd-manager--interface iwd-manager--device iwd-manager--station-interface)))
+    (let ((scanning? (alist-get "Scanning" station-props nil nil #'string=))
+          (state (alist-get "State" station-props nil nil #'string=))
+          (name (alist-get "Name" device-props nil nil #'string=)))
+      (format " [%s %s%s]" name state (if scanning? ", scanning" "")))))
+
 ;;;###autoload
 (defun iwd-manager ()
   "Manage wifi connections through IWD."
@@ -185,7 +197,8 @@
   (with-current-buffer (switch-to-buffer "*IWD Manager*")
     (unless iwd-manager--registered-objects
       (iwd-manager--register-agent))
-    (iwd-manager-mode))
+    (iwd-manager-mode)
+    (cl-pushnew iwd-manager--mode-info mode-line-process))
   nil)
 
 (provide 'iwd-manager)
