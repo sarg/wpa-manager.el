@@ -5,7 +5,7 @@
 ;; Author: Sergey Trofimov <sarg@sarg.org.ru>
 ;; Version: 0.1
 ;; URL: https://github.com/sarg/wpa-manager.el
-;; Package-Requires: ((emacs "26.1"))
+;; Package-Requires: ((emacs "26.1") (promise "1.1"))
 
 ;;; Commentary:
 ;;; A dbus-based client for iNet Wireless Daemon.
@@ -13,6 +13,8 @@
 
 ;;; Code:
 (require 'dbus)
+(require 'promise)
+(require 'notifications)
 (require 'cl-lib)
 
 (defconst iwd-manager--service "net.connman.iwd")
@@ -20,6 +22,7 @@
 (defconst iwd-manager--agent-path "/iwd/agent")
 (defconst iwd-manager--agent-manager-interface "net.connman.iwd.AgentManager")
 (defconst iwd-manager--station-interface "net.connman.iwd.Station")
+(defconst iwd-manager--network-interface "net.connman.iwd.Network")
 
 (defvar-local iwd-manager--cached-objects nil
   "Cache for D-Bus managed objects to avoid repeated calls.")
@@ -69,7 +72,7 @@
    for net in ordered
    collect (let* ((net-path (car net))
                   (obj (iwd-manager--find-obj net-path))
-                  (props (iwd-manager--interface obj "net.connman.iwd.Network"))
+                  (props (iwd-manager--interface obj iwd-manager--network-interface))
                   (signal (/ (cadr net) 100))
                   (ssid (alist-get "Name" props nil nil #'string=))
                   (connected (alist-get "Connected" props nil nil #'string=)))
@@ -92,7 +95,7 @@
 (defun iwd-manager--request-passphrase (network-path)
   "Request passphrase for network identified by NETWORK-PATH."
   (when-let* ((obj (iwd-manager--find-obj network-path))
-              (props (iwd-manager--interface obj "net.connman.iwd.Network"))
+              (props (iwd-manager--interface obj iwd-manager--network-interface))
               (ssid (alist-get "Name" props nil nil #'string=)))
     (condition-case err
         (read-passwd (format "Passphrase for %s: " ssid))
@@ -140,7 +143,7 @@
   "Forget NETWORK."
   (interactive nil iwd-manager-mode)
   (if-let* ((obj (tabulated-list-get-id))
-            (props (iwd-manager--interface obj "net.connman.iwd.Network"))
+            (props (iwd-manager--interface obj iwd-manager--network-interface))
             ((alist-get "Connected" props nil nil #'string=))
             (net (alist-get "KnownNetwork" props nil nil #'string=)))
       (dbus-call-method
@@ -152,10 +155,27 @@
   "Connect to the currently selected access point."
   (interactive nil iwd-manager-mode)
   (let* ((obj (tabulated-list-get-id))
+         (net-props (iwd-manager--interface obj iwd-manager--network-interface))
+         (ssid (alist-get "Name" net-props nil nil #'string=))
          (network-path (car obj)))
-    (dbus-call-method-asynchronously
-     :system iwd-manager--service network-path "net.connman.iwd.Network"
-     "Connect" nil)))
+    (promise-chain
+        (promise-new
+         (lambda (resolve reject)
+           (condition-case err
+               (progn
+                 (dbus-call-method
+                  :system iwd-manager--service network-path iwd-manager--network-interface
+                  "Connect")
+                 (funcall resolve t))
+             (dbus-error (funcall reject (cdr err))))))
+      (then (lambda (_)
+              (notifications-notify
+               :title (concat "IWD: " ssid)
+               :body "Connected")))
+      (catch (lambda (err)
+               (notifications-notify
+                :title (concat "IWD: " ssid)
+                :body (cadr err)))))))
 
 ;;;###autoload
 (define-derived-mode iwd-manager-mode tabulated-list-mode
