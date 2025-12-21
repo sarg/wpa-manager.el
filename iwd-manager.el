@@ -1,6 +1,7 @@
 ;;; iwd-manager.el --- Manage IWD via the D-Bus interface -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2023 by Sergey Trofimov
+;; Copyright (C) 2025 by Sergey Trofimov
+;; SPDX-License-Identifier: Unlicense
 
 ;; Author: Sergey Trofimov <sarg@sarg.org.ru>
 ;; Version: 0.1
@@ -8,8 +9,8 @@
 ;; Package-Requires: ((emacs "26.1") (promise "1.1"))
 
 ;;; Commentary:
-;;; A dbus-based client for iNet Wireless Daemon.
-;;; Supports connecting to PSK networks.
+;; A dbus-based client for iNet Wireless Daemon.
+;; Supports connecting to PSK networks.
 
 ;;; Code:
 (require 'dbus)
