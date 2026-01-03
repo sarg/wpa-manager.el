@@ -152,6 +152,13 @@
        "Forget")
     (user-error "Not a known network")))
 
+(defun iwd-manager-disconnect ()
+  "Disconnect from current access point."
+  (interactive nil iwd-manager-mode)
+  (dbus-call-method
+   :system iwd-manager--service (car iwd-manager--device) iwd-manager--station-interface
+   "Disconnect"))
+
 (defun iwd-manager-connect ()
   "Connect to the currently selected access point."
   (interactive nil iwd-manager-mode)
@@ -201,6 +208,7 @@
     (set-keymap-parent map tabulated-list-mode-map)
     (define-key map [?s] #'iwd-manager-scan)
     (define-key map [?c] #'iwd-manager-connect)
+    (define-key map [?d] #'iwd-manager-disconnect)
     (define-key map [?D] #'iwd-manager-delete-network)
     map))
 
