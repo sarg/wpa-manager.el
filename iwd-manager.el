@@ -103,6 +103,9 @@
       (quit (list :error "net.connman.iwd.Agent.Error.Canceled"
                   (error-message-string err))))))
 
+(defvar-local iwd-manager--refresh-timer (timer-create))
+(put 'iwd-manager--refersh-timer 'permanent-local t)
+
 (defun iwd-manager--register-agent ()
   "Register the agent with IWD."
   (add-to-list
@@ -126,12 +129,19 @@
         :system iwd-manager--service
         (nth 0 i) (nth 1 i) (nth 2 i)
         (lambda (&rest _)
-          (when (buffer-live-p buffer)
-            (with-current-buffer buffer
-              (revert-buffer)))))))))
+          (ignore-errors (cancel-timer iwd-manager--refresh-timer))
+          (setq iwd-manager--refresh-timer
+                (run-with-timer
+                 0.2 nil
+                 (lambda ()
+                   (when (buffer-live-p buffer)
+                     (with-current-buffer buffer
+                       (revert-buffer))))))))))))
 
-(defun iwd-manager--unregister-agent ()
-  "Unregister the agent from IWD."
+(defun iwd-manager--cleanup ()
+  "Wind down iwd-manager."
+  (ignore-errors (cancel-timer iwd-manager--refresh-timer))
+
   (dolist (o iwd-manager--registered-objects)
     (dbus-unregister-object o))
 
@@ -196,7 +206,7 @@
         tabulated-list-padding 0)
 
   (add-hook 'tabulated-list-revert-hook #'iwd-manager--list-entries nil t)
-  (add-hook 'kill-buffer-hook #'iwd-manager--unregister-agent nil t)
+  (add-hook 'kill-buffer-hook #'iwd-manager--cleanup nil t)
 
   (iwd-manager--list-entries)
   (tabulated-list-init-header)
