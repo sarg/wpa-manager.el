@@ -4,7 +4,7 @@
 ;; SPDX-License-Identifier: Unlicense
 
 ;; Author: Sergey Trofimov <sarg@sarg.org.ru>
-;; Version: 0.2
+;; Version: 0.3
 ;; URL: https://github.com/sarg/wpa-manager.el
 ;; Package-Requires: ((emacs "26.1") (promise "1.1"))
 
@@ -36,6 +36,8 @@
 (defconst iwd-manager--path "/net/connman/iwd")
 (defconst iwd-manager--agent-path "/iwd/agent")
 (defconst iwd-manager--agent-manager-interface "net.connman.iwd.AgentManager")
+(defconst iwd-manager--device-interface "net.connman.iwd.Device")
+(defconst iwd-manager--adapter-interface "net.connman.iwd.Adapter")
 (defconst iwd-manager--station-interface "net.connman.iwd.Station")
 (defconst iwd-manager--network-interface "net.connman.iwd.Network")
 
@@ -64,17 +66,18 @@
   (interactive)
   (or
    (seq-find
-    (lambda (obj) (iwd-manager--interface obj iwd-manager--station-interface))
+    (lambda (obj) (iwd-manager--interface obj iwd-manager--device-interface))
     iwd-manager-cached-objects)
-   (user-error "No stations found")))
+   (user-error "No devices found")))
 
 (defun iwd-manager--list-networks ()
   "List last-scanned access-points."
   (cl-loop
    with ordered =
-   (dbus-call-method
-    :system iwd-manager--service (car iwd-manager-device) iwd-manager--station-interface
-    "GetOrderedNetworks")
+   (unless (eq 'off (plist-get iwd-manager-device-state :state))
+     (dbus-call-method
+      :system iwd-manager--service (car iwd-manager-device) iwd-manager--station-interface
+      "GetOrderedNetworks"))
    for net in ordered
    collect (let* ((obj (iwd-manager--find-obj (car net)))
                   (props (iwd-manager--interface obj iwd-manager--network-interface))
@@ -87,9 +90,7 @@
                                 'face (cond
                                        (connected 'bold)
                                        ((not ssid) 'shadow)))
-                    (format "%d dBm" signal))))
-   into entries
-   finally (setq tabulated-list-entries entries)))
+                    (format "%d dBm" signal))))))
 
 (defun iwd-manager-scan ()
   "Start scanning for access points."
@@ -231,20 +232,34 @@
   :interactive nil
 
   (setq tabulated-list-format [("SSID" 24 t) ("Signal" 6 t)]
-        tabulated-list-entries nil
+        tabulated-list-entries #'iwd-manager--list-networks
         tabulated-list-padding 0)
 
-  (add-hook 'tabulated-list-revert-hook #'iwd-manager--list-networks nil t)
-
-  (iwd-manager--list-networks)
   (tabulated-list-init-header)
   (tabulated-list-print)
   (hl-line-mode))
+
+(defun iwd-manager-toggle-power ()
+  "Toggle adapter power."
+  (interactive)
+  (let* ((adapter
+          (thread-last
+            (iwd-manager--interface iwd-manager-device iwd-manager--device-interface)
+            (assoc-string "Adapter")
+            (cdr)
+            (iwd-manager--find-obj)))
+         (props (iwd-manager--interface adapter iwd-manager--adapter-interface)))
+    (dbus-set-property
+     :system iwd-manager--service
+     (car adapter)
+     "net.connman.iwd.Adapter"
+     "Powered" (not (cdr (assoc-string "Powered" props))))))
 
 (defvar iwd-manager-mode-map
   (let ((map (make-sparse-keymap)))
     (set-keymap-parent map tabulated-list-mode-map)
     (define-key map [?s] #'iwd-manager-scan)
+    (define-key map [?p] #'iwd-manager-toggle-power)
     (define-key map [?c] #'iwd-manager-connect)
     (define-key map [?d] #'iwd-manager-disconnect)
     (define-key map [?D] #'iwd-manager-delete-network)
@@ -261,22 +276,23 @@
             (iwd-manager--find-obj (car iwd-manager-device))
           (iwd-manager--select-device)))
 
-  (when-let* ((device-props (iwd-manager--interface iwd-manager-device "net.connman.iwd.Device"))
-              (station-props (iwd-manager--interface iwd-manager-device iwd-manager--station-interface)))
-    (let* ((scanning? (and (cdr (assoc-string "Scanning" station-props)) t))
-           (state (intern (cdr (assoc-string "State" station-props))))
-           (connected-network
-            (and (eq state 'connected)
-                 (thread-first
-                   (cdr (assoc-string "ConnectedNetwork" station-props))
-                   (iwd-manager--find-obj)
-                   (iwd-manager--interface iwd-manager--network-interface)))))
-      (setq iwd-manager-device-state
-            (list
-             :name (cdr (assoc-string "Name" device-props))
-             :state state
-             :ssid (cdr (assoc-string "Name" connected-network))
-             :scanning scanning?)))))
+  (let* ((device-props (iwd-manager--interface iwd-manager-device iwd-manager--device-interface))
+         (station-props (iwd-manager--interface iwd-manager-device iwd-manager--station-interface))
+         (scanning? (and (cdr (assoc-string "Scanning" station-props)) t))
+         (powered? (cdr (assoc-string "Powered" device-props)))
+         (state (if powered? (intern (cdr (assoc-string "State" station-props))) 'off))
+         (connected-network
+          (and (eq state 'connected)
+               (thread-first
+                 (cdr (assoc-string "ConnectedNetwork" station-props))
+                 (iwd-manager--find-obj)
+                 (iwd-manager--interface iwd-manager--network-interface)))))
+    (setq iwd-manager-device-state
+          (list
+           :name (cdr (assoc-string "Name" device-props))
+           :state state
+           :ssid (cdr (assoc-string "Name" connected-network))
+           :scanning scanning?))))
 
 (cl-defun iwd-manager--format-mode-line-default (&key state ssid scanning &allow-other-keys)
   "Default mode-line formatter.
